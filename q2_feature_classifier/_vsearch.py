@@ -139,9 +139,11 @@ def classify_hybrid_vsearch_sklearn(ctx,
                                     reference_taxonomy,
                                     classifier,
                                     maxaccepts=DEFAULTMAXACCEPTS,
-                                    perc_identity=0.5,
+                                    perc_identity=0.95,
                                     query_cov=DEFAULTQUERYCOV,
                                     strand=DEFAULTSTRAND,
+                                    search_exact=True,  # Keep old behavior
+                                    top_hits_only=DEFAULTTOPHITS,
                                     min_consensus=DEFAULTMINCONSENSUS,
                                     maxhits=DEFAULTMAXHITS,
                                     maxrejects=DEFAULTMAXREJECTS,
@@ -150,6 +152,8 @@ def classify_hybrid_vsearch_sklearn(ctx,
                                     read_orientation='auto',
                                     threads=DEFAULTTHREADS,
                                     prefilter=True,
+                                    prefilter_perc_identity=0.5,
+                                    prefilter_query_cov=DEFAULTQUERYCOV,
                                     sample_size=1000,
                                     randseed=0):
     exclude = ctx.get_action('quality_control', 'exclude_seqs')
@@ -172,17 +176,18 @@ def classify_hybrid_vsearch_sklearn(ctx,
             # perform rough positive filter on query sequences
             query, misses, = exclude(
                 query_sequences=query, reference_sequences=sparse_reference,
-                method='vsearch', perc_identity=perc_identity,
-                perc_query_aligned=query_cov, threads=threads)
+                method='vsearch', perc_identity=prefilter_perc_identity,
+                perc_query_aligned=prefilter_query_cov, threads=threads)
 
     # find exact matches, perform LCA consensus classification
     # note: we only keep the taxonomic assignments, not the search report
-    taxa1, _, = ccv(
+    taxa1, blast_result, = ccv(
         query=query, reference_reads=reference_reads,
         reference_taxonomy=reference_taxonomy, maxaccepts=maxaccepts,
-        strand=strand, min_consensus=min_consensus, search_exact=True,
-        threads=threads, maxhits=maxhits, maxrejects=maxrejects,
-        output_no_hits=True)
+        perc_identity=perc_identity, query_cov=query_cov, strand=strand,
+        search_exact=search_exact, top_hits_only=top_hits_only,
+        maxhits=maxhits, maxrejects=maxrejects, output_no_hits=True,
+        threads=threads, min_consensus=min_consensus)
 
     # Annotate taxonomic assignments with classification method
     taxa1 = _annotate_method(taxa1, 'VSEARCH')
@@ -216,11 +221,11 @@ parameters = {'maxaccepts': Int % Range(1, None) | Str % Choices(['all']),
               'strand': Str % Choices(['both', 'plus']),
               'threads': Threads,
               'maxhits': Int % Range(1, None) | Str % Choices(['all']),
-              'maxrejects': Int % Range(1, None) | Str % Choices(['all'])}
+              'maxrejects': Int % Range(1, None) | Str % Choices(['all']),
+              'search_exact': Bool,
+              'top_hits_only': Bool}
 
-extra_params = {'search_exact': Bool,
-                'top_hits_only': Bool,
-                'output_no_hits': Bool,
+extra_params = {'output_no_hits': Bool,
                 'weak_id': Float % Range(0.0, 1.0, inclusive_end=True)}
 
 inputs = {'query': FeatureData[Sequence],
@@ -258,9 +263,7 @@ parameter_descriptions = {
     'maxrejects': 'Maximum number of non-matching target sequences to '
                   'consider before stopping the search. This option works in '
                   'pair with maxaccepts (see maxaccepts description for '
-                  'details).'}
-
-extra_param_descriptions = {
+                  'details).',
     'search_exact': 'Search for exact full-length matches to the query '
                     'sequences. Only 100% exact matches are reported and this '
                     'command is much faster than the default. If True, the '
@@ -275,6 +278,9 @@ extra_param_descriptions = {
                      'identity. Multiple equally scored top hits will be '
                      'used for consensus taxonomic assignment if '
                      'maxaccepts is greater than 1.',
+}
+
+extra_param_descriptions = {
     'output_no_hits': 'Report both matching and non-matching queries. '
                       'WARNING: always use the default setting for this '
                       'option unless if you know what you are doing! If '
@@ -369,6 +375,10 @@ plugin.pipelines.register_function(
                 'confidence': _classify_parameters['confidence'],
                 'read_orientation': _classify_parameters['read_orientation'],
                 'prefilter': Bool,
+                'prefilter_perc_identity': \
+                    Float % Range(0.0, 1.0, inclusive_end=True),
+                'prefilter_query_cov': \
+                    Float % Range(0.0, 1.0, inclusive_end=True),
                 'sample_size': Int % Range(1, None),
                 'randseed': Int % Range(0, None)},
     outputs=[classification_output],
@@ -378,16 +388,17 @@ plugin.pipelines.register_function(
                                       'classifier for classifying the reads.'},
     parameter_descriptions={
         **{k: parameter_descriptions[k] for k in [
-            'strand', 'maxaccepts', 'threads']},
+            'perc_identity', 'query_cov', 'strand', 'maxaccepts', 'threads',
+            'search_exact', 'top_hits_only']},
         **min_consensus_param_description,
-        'perc_identity': 'Percent sequence similarity to use for PREFILTER. ' +
-                         parameter_descriptions['perc_identity'] + ' Set to a '
-                         'lower value to perform a rough pre-filter.' +
-                         ignore_prefilter,
-        'query_cov': 'Query coverage threshold to use for PREFILTER. ' +
-                     parameter_descriptions['query_cov'] + ' Set to a '
-                     'lower value to perform a rough pre-filter.' +
-                     ignore_prefilter,
+        'prefilter_perc_identity': (
+            'Percent sequence similarity to use for PREFILTER. ' +
+            parameter_descriptions['perc_identity'] + ' Set to a lower value '
+            'to perform a rough pre-filter.' + ignore_prefilter),
+        'prefilter_query_cov': (
+            'Query coverage threshold to use for PREFILTER. ' +
+            parameter_descriptions['query_cov'] + ' Set to a lower value to '
+            'perform a rough pre-filter.' + ignore_prefilter),
         'confidence': _parameter_descriptions['confidence'],
         'read_orientation': 'Direction of reads with respect to reference '
                             'sequences in pre-trained sklearn classifier. '
