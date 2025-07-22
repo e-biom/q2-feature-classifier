@@ -361,10 +361,6 @@ def _usearch_search_pcr(
          "amplicon_length"],
         axis=1
     )
-    # Some sequences may have multiple amplicons, we only want to keep the
-    #  one with the least mismatches
-    rv.sort_values(["Feature ID", "primers_mismatches"], inplace=True)
-    rv.drop_duplicates("Feature ID", keep="first", inplace=True)
     return rv
 
 
@@ -468,6 +464,10 @@ def _combine_usearch_results(
         "Feature ID", "primer_F_seq", "primer_R_seq", "amplicon_sequence",
         "primer_F_mismatches", "primer_R_mismatches", "primers_mismatches"
     ]]
+    # Some sequences may have multiple amplicons, we only want to keep the
+    #  one with the least mismatches
+    rv.sort_values(["Feature ID", "primers_mismatches"], inplace=True)
+    rv.drop_duplicates("Feature ID", keep="first", inplace=True)
     return rv
 
 
@@ -500,17 +500,6 @@ def _clean_amplicons(pcr_summary: pd.DataFrame) -> pd.DataFrame:
         "amplicon_sequence", "amplicon_length", "trimmed_sequence",
         "trimmed_length",
     ]]
-    return pcr_summary
-
-
-def _generate_summary(
-        oligodb_forward: pd.DataFrame, oligodb_reverse: pd.DataFrame,
-        search_pcr: pd.DataFrame
-) -> pd.DataFrame:
-    pcr_summary = _combine_usearch_results(
-        oligodb_forward, oligodb_reverse, search_pcr)
-    pcr_summary = _clean_amplicons(pcr_summary)
-    pcr_summary.set_index("Feature ID", inplace=True)
     return pcr_summary
 
 
