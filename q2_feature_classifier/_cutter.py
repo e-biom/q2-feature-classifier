@@ -428,110 +428,95 @@ def _usearch_search_pcr(
 
 
 def _combine_usearch_results(
-        oligodb_forward_df: pd.DataFrame, oligodb_reverse_df: pd.DataFrame,
+        oligodb_forward_df: pd.DataFrame,
+        oligodb_reverse_df: pd.DataFrame,
         search_pcr_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """Combine the results from search_oligodb and search_pcr.
-    The aim is to replace the "primer dot sequences" with the actual matching
-    sequences."""
-    # There are some discrepancies in the strand direction reported by
-    #  search_oligodb and search_pcr, so we have to merge twice per direction
-    # Positive (p) strand in search_pcr and positive (p) strand in search_oligodb
-    merged_p_p = (
-        search_pcr_df[
-            (search_pcr_df["pcr_primer_F_strand"] == "+")
-            & (search_pcr_df["pcr_primer_R_strand"] == "-")
-        ]
-        # Merge forward primers in the expected direction
-        .merge(
-            oligodb_forward_df.loc[oligodb_forward_df["strand"] == "+"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_F_dot"],
-            right_on=["Feature ID", "primer_F_dot"],
-        )
-        # Merge reverse primers in the expected direction
-        .merge(
-            oligodb_reverse_df[oligodb_reverse_df["strand"] == "-"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_R_dot"],
-            right_on=["Feature ID", "primer_R_dot"],
-        )
-    )  # noqa: E501 improves readability
 
-    # Positive (p) strand in search_pcr and negative (n) strand in search_oligodb
-    merged_p_n = (
-        search_pcr_df[
-            (search_pcr_df["pcr_primer_F_strand"] == "+")
-            & (search_pcr_df["pcr_primer_R_strand"] == "-")
-        ]
-        # Merge forward primers wrongly (?) detected in the opposite direction
-        #  by search_oligodb
-        .merge(
-            oligodb_forward_df[oligodb_forward_df["strand"] == "-"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_R_dot"],
-            right_on=["Feature ID", "primer_F_dot"],
-        )
-        # Merge reverse primers wrongly (?) detected in the opposite direction
-        #  by search_oligodb
-        .merge(
-            oligodb_reverse_df[oligodb_reverse_df["strand"] == "+"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_F_dot"],
-            right_on=["Feature ID", "primer_R_dot"],
-        )
-    )  # noqa: E501 improves readability
+    This function merges the results from search_oligodb and search_pcr to replace
+    the "primer dot sequences" with the actual matching sequences. It handles
+    different strand orientations between the two search methods.
 
-    # Negative (n) strand in search_pcr and negative (n) strand in search_oligodb
-    merged_n_n = (
-        search_pcr_df[
-            (search_pcr_df["pcr_primer_F_strand"] == "-")
-            & (search_pcr_df["pcr_primer_R_strand"] == "+")
-        ]
-        .merge(
-            oligodb_forward_df[oligodb_forward_df["strand"] == "-"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_F_dot"],
-            right_on=["Feature ID", "primer_F_dot"],
-        )
-        .merge(
-            oligodb_reverse_df[oligodb_reverse_df["strand"] == "+"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_R_dot"],
-            right_on=["Feature ID", "primer_R_dot"],
-        )
-    )  # noqa: E501 improves readability
+    Args:
+        oligodb_forward_df: DataFrame with forward primer matches from search_oligodb
+        oligodb_reverse_df: DataFrame with reverse primer matches from search_oligodb
+        search_pcr_df: DataFrame with PCR amplicon results from search_pcr
 
-    # Negative (n) strand in search_pcr and positive (p) strand in search_oligodb
-    merged_n_p = (
-        search_pcr_df[
-            (search_pcr_df["pcr_primer_F_strand"] == "-")
-            & (search_pcr_df["pcr_primer_R_strand"] == "+")
-        ]
-        .merge(
-            oligodb_forward_df[oligodb_forward_df["strand"] == "+"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_R_dot"],
-            right_on=["Feature ID", "primer_F_dot"],
-        )
-        .merge(
-            oligodb_reverse_df[oligodb_reverse_df["strand"] == "-"].drop('strand', axis=1),
-            how="inner",
-            left_on=["Feature ID", "pcr_primer_F_dot"],
-            right_on=["Feature ID", "primer_R_dot"],
-        )
-    )  # noqa: E501 improves readability
-
-    rv = pd.concat([merged_p_p, merged_p_n, merged_n_n, merged_n_p])
-    rv = rv[[
+    Returns:
+        DataFrame with combined results, keeping only the best match per feature.
+    """
+    COLUMNS_TO_KEEP = [
         "Feature ID", "primer_F_seq", "primer_R_seq", "amplicon_sequence",
         "primer_F_mismatches", "primer_R_mismatches", "primers_mismatches"
-    ]]
-    # Some sequences may have multiple amplicons, we only want to keep the
-    #  one with the least mismatches
-    rv.sort_values(["Feature ID", "primers_mismatches"], inplace=True)
-    rv.drop_duplicates("Feature ID", keep="first", inplace=True)
-    return rv
+    ]
+
+    def process_orientation(
+            pcr_strand_f: str,
+            pcr_strand_r: str,
+            oligo_strand_f: str,
+            oligo_strand_r: str,
+            dot_sequence_f: str,
+            dot_sequence_r: str,
+    ) -> pd.DataFrame:
+        """Process a specific strand orientation combination."""
+        filtered = search_pcr_df[
+            (search_pcr_df["pcr_primer_F_strand"] == pcr_strand_f) &
+            (search_pcr_df["pcr_primer_R_strand"] == pcr_strand_r)
+        ]
+
+        if filtered.empty:
+            return pd.DataFrame(columns=COLUMNS_TO_KEEP)
+
+        # Merge forward primers
+        of_filtered = (
+            oligodb_forward_df[oligodb_forward_df["strand"] == oligo_strand_f]
+            .drop('strand', axis=1)
+        )
+
+        merged = filtered.merge(
+            of_filtered,
+            how="inner",
+            left_on=["Feature ID", dot_sequence_f],
+            right_on=["Feature ID", "primer_F_dot"],
+        )
+
+        # Merge reverse primers
+        or_filtered = (
+            oligodb_reverse_df[oligodb_reverse_df["strand"] == oligo_strand_r]
+            .drop('strand', axis=1)
+        )
+
+        merged = merged.merge(
+            or_filtered,
+            how="inner",
+            left_on=["Feature ID", dot_sequence_r],
+            right_on=["Feature ID", "primer_R_dot"],
+        )
+
+        return merged[COLUMNS_TO_KEEP] if not merged.empty else pd.DataFrame(columns=COLUMNS_TO_KEEP)
+
+    # Define orientation combinations to process
+    orientations = [
+        # pcr_strand_f, pcr_strand_r, oligo_strand_f, oligo_strand_r, dot_sequence_f, dot_sequence_r
+        ("+", "-", "+", "-", "pcr_primer_F_dot", "pcr_primer_R_dot"),
+        ("+", "-", "-", "+", "pcr_primer_R_dot", "pcr_primer_F_dot"),
+        ("-", "+", "-", "+", "pcr_primer_F_dot", "pcr_primer_R_dot"),
+        ("-", "+", "+", "-", "pcr_primer_R_dot", "pcr_primer_F_dot"),
+    ]
+
+    # Process all orientations and combine results
+    combined = pd.DataFrame(columns=COLUMNS_TO_KEEP)
+    for orientation in orientations:
+        result = process_orientation(*orientation)
+        if not result.empty:
+            combined = pd.concat([combined, result], copy=False)
+
+    # Keep only the best match (lowest mismatches) per feature
+    combined.sort_values(["Feature ID", "primers_mismatches"], inplace=True)
+    combined.drop_duplicates("Feature ID", keep="first", inplace=True)
+
+    return combined
 
 
 def _clean_amplicons(pcr_summary: pd.DataFrame) -> pd.DataFrame:
