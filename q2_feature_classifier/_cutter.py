@@ -457,35 +457,34 @@ def _combine_usearch_results(
 
 
 def _clean_amplicons(pcr_summary: pd.DataFrame) -> pd.DataFrame:
-    """search_pcr returns amplicons with the primers """
-    pcr_summary["trimmed_sequence"] = ""
-    pcr_summary["amplicon_length"] = 0
-    pcr_summary["trimmed_length"] = 0
-    for index, row in pcr_summary.iterrows():
-        f_primer = row["primer_F_seq"]
-        r_primer = row["primer_R_seq"]
-        amplicon = row["amplicon_sequence"]
-        if amplicon[:len(f_primer)] == f_primer:
-            # The reported sequence is in the expected orientation, we just need
-            #  to trim the primers
-            trimmed_amplicon = amplicon[len(f_primer):-len(r_primer)]
-        else:
-            # We need to trim and reverse complement the amplicon so it is in
-            #  the expected orientation
-            amplicon = str(skbio.DNA(amplicon).reverse_complement())
-            trimmed_amplicon = amplicon[len(r_primer):-len(f_primer)]
-        pcr_summary.at[index, "amplicon_sequence"] = amplicon
-        pcr_summary.at[index, "amplicon_length"] = len(amplicon)
-        pcr_summary.at[index, "trimmed_sequence"] = trimmed_amplicon
-        pcr_summary.at[index, "trimmed_length"] = len(trimmed_amplicon)
+    primer_f_len = len(pcr_summary.iloc[0]["primer_F_seq"])
+    primer_r_len = len(pcr_summary.iloc[0]["primer_R_seq"])
 
-    pcr_summary = pcr_summary[[
+    # Reverse complement the amplicons that need it
+    need_rc = (
+        pcr_summary["amplicon_sequence"].str.slice(stop=primer_f_len)
+        != pcr_summary["primer_F_seq"]
+    )
+    rc_amplicons = pcr_summary["amplicon_sequence"][need_rc].apply(
+        lambda x: str(skbio.DNA(x).reverse_complement())
+    )
+    pcr_summary.loc[need_rc, "amplicon_sequence"] = rc_amplicons
+
+    # Trim primers from all sequences
+    pcr_summary["trimmed_sequence"] = \
+        pcr_summary["amplicon_sequence"].str.slice(start=primer_f_len, stop=-primer_r_len)
+
+    # Calculate lengths
+    pcr_summary["amplicon_length"] = pcr_summary["amplicon_sequence"].str.len()
+    pcr_summary["trimmed_length"] = pcr_summary["trimmed_sequence"].str.len()
+
+    # Select and return only the required columns in the required order
+    return pcr_summary[[
         "Feature ID", "primer_F_seq", "primer_R_seq",
         "primer_F_mismatches", "primer_R_mismatches", "primers_mismatches",
         "amplicon_sequence", "amplicon_length", "trimmed_sequence",
         "trimmed_length",
     ]]
-    return pcr_summary
 
 
 def _write_reads(output_path: DNAFASTAFormat, summary_df: pd.DataFrame) -> None:
