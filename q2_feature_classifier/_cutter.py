@@ -551,9 +551,20 @@ def _clean_amplicons(pcr_summary: pd.DataFrame) -> pd.DataFrame:
 
 
 def _write_reads(output_path: DNAFASTAFormat, summary_df: pd.DataFrame) -> None:
+    result_df = summary_df.copy()[["Feature ID", "trimmed_sequence"]]
+    result_df["caret"] = ">"
+    result_df["sep"] = "\n"
+
+    fasta_lines = list(
+        result_df["caret"]
+        + result_df["Feature ID"]
+        + result_df["sep"]
+        + result_df["trimmed_sequence"]
+        + result_df["sep"]
+    )
+
     with open(str(output_path), 'a') as fh:
-        for index, row in summary_df.iterrows():
-            fh.write(f">{row['Feature ID']}\n{row['trimmed_sequence']}\n")
+        fh.writelines(fasta_lines)
 
 
 def usearch_PCR(
